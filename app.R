@@ -8,8 +8,8 @@ list_of_packages <- c("reshape2", "DT", "shiny", "shinydashboard",
 
 new_packages <- list_of_packages[list_of_packages %notin% 
                                    installed.packages()[, "Package"]]
-if(length(new.packages)) {
-  install.packages(new.packages);
+if(length(new_packages)) {
+  install.packages(new_packages);
 }
 
 library(reshape2)

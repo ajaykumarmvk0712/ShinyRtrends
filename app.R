@@ -6,7 +6,7 @@ list_of_packages <- c("reshape2", "DT", "shiny", "shinydashboard",
                       "dplyr", "scales", "ggplot2", "grid",
                       "gridExtra", "gtable")
 
-new_packages <- list_of_packages[list_of_packages %notin% 
+new_packages <- list_of_packages[list_of_packages %notin%
                                    installed.packages()[, "Package"]]
 if(length(new_packages)) {
   install.packages(new_packages);
@@ -117,8 +117,9 @@ ui <- dashboardPage(
                      verbatimTextOutput("value"),
                      dataTableOutput("view")),
             tabPanel("For Combining Categories",
+                     verbatimTextOutput("newcheck"),
                      uiOutput("mytabs")
-                     #verbatimTextOutput("newcheck")
+                     
             ),
             tabPanel("Descriptions and Help",
                      h2("Purpose of Application"),
@@ -186,7 +187,15 @@ ui <- dashboardPage(
           collapsible = TRUE,
           collapsed = TRUE,
           downloadButton('downloadPlot', 'Download Plot'),
-          br(),br(),
+          br(),
+          checkboxInput("text_on_line", 
+                        "Add data labels on line plot",
+                        value = TRUE),
+          br(),
+          checkboxInput("text_on_bar", 
+                        "Add data labels on bar plot",
+                        value = TRUE),
+          br(),
           plotOutput("myplot"),
           width = 150
         )))))
@@ -363,10 +372,19 @@ server <- function(input, output, session) {
     req(input$variable)
     
     if(is.numeric(check_data()[,1]) == FALSE)  {
-      selectizeInput("new_tot_classes", h3("Total number of resulting classes"),
+      list(
+      tags$p(checkboxInput("combine_by_response_rate",
+                    "Combine classes by response rate",
+                    value = FALSE)),
+      
+      tags$p(checkboxInput("combine_by_name",
+                    "Combine classes by class name",
+                    value = TRUE)),
+      
+      tags$p(selectizeInput("new_tot_classes", h3("Total number of combinations"),
                      choices = 0:4,
                      # choices = 0 : (length(unique(check_data()[, 1])) - 1 ),
-                     selected = 0) 
+                     selected = 0))) 
     }
   })
   
@@ -407,7 +425,7 @@ server <- function(input, output, session) {
     # basically if a user wants to see 3 new classes after combining
     # original values, there will be 3 drop downs.
     
-    if(numAssets != 0) {
+    if(numAssets != 0 & input$combine_by_name == TRUE) {
       lapply(1:numAssets, function(i) {
         list(tags$p(tags$u(h4(paste0("Class ", i, ":")))),
              
@@ -417,11 +435,25 @@ server <- function(input, output, session) {
                             h3("Combine Categories"),
                             choices = unique(check_data()[, 1]),
                             selected = unique(check_data()[, 1])[1],
-                            multiple = TRUE)
-        )
+                            multiple = TRUE))
       }
       )
-    } else {return(NULL)}
+    } else if(numAssets != 0 & input$combine_by_response_rate == TRUE) {
+      lapply(1:numAssets, function(i) {
+        list(tags$p(tags$u(h4(paste0("Class ", i, ":")))),
+             
+             # input#combine1, input$combine2 etc get created 
+             # dynamically
+             sliderInput(paste("combine_res", i, sep = ""), 
+                            h3("Combine Categories"),
+                            min = 0,
+                            max = 1,
+                            value = c(0.25, 0.5),
+                            step = 0.001))
+      }
+      )
+    }
+    else {return(NULL)}
   })
   
   subset_data <- reactive({
@@ -525,7 +557,7 @@ server <- function(input, output, session) {
                                       paste0(unlist(input$combine4), collapse = ""),
                                       subset_data()[, 1])))))
       out = as.data.frame(out)
-    } else {out = data.frame("V1" = "Yo")}
+    } else {return(NULL)}
     return(out)
   })
   
@@ -679,6 +711,10 @@ server <- function(input, output, session) {
             }
   })
   
+  check_response_rate <- reactive({
+    input$combine_by_response_rate
+  })
+  
   final_view <- reactive({
     
     validate(
@@ -698,25 +734,218 @@ server <- function(input, output, session) {
                       res_rate = round((ones / tot), 4),
                       cust_perc = round((tot / n), 4) ) %>% 
       as.data.frame()
-    
-    bv_data$tot <- format(bv_data$tot, big.mark=',', 
-                          scientific=FALSE)
-    
-    bv_data$zeros <- format(bv_data$zeros, big.mark=',', 
-                            scientific=FALSE) 
-    
-    bv_data$ones <- format(bv_data$ones, big.mark=',', 
-                           scientific=FALSE) 
-    
-    bv_data$res_rate <- percent(bv_data$res_rate)
-    bv_data$cust_perc <- percent(bv_data$cust_perc)
-    
+
     colnames(bv_data)[1] <- "Attribute"
-    return(bv_data)
+    
+    if(is.numeric(subset_data()[, 1]) == TRUE) {
+      good_out <- bv_data
+    } else if(input$combine_by_name == TRUE &
+              input$combine_by_response_rate == TRUE) {
+      validate(
+        need(xor(input$combine_by_name == TRUE ,
+                 input$combine_by_response_rate == TRUE),
+             "Please tick only one check box")
+      )
+    } else if(input$combine_by_name == FALSE &
+              input$combine_by_response_rate == FALSE) {
+      validate(
+        need(xor(input$combine_by_name == TRUE ,
+               input$combine_by_response_rate == TRUE),
+             "Please tick a check box")
+      )
+    } else if(input$combine_by_name == TRUE &
+              input$combine_by_response_rate == FALSE) {
+      good_out <- bv_data
+    } else if(input$combine_by_response_rate == TRUE &
+              input$combine_by_name == FALSE) {
+      numAssets <- as.numeric(input$new_tot_classes)
+      if(numAssets == 0) {
+        new_data <- bv_data
+      } else if(numAssets == 1) {
+        lower_lim1 <- reactive({as.numeric(input$combine_res1[1])})
+        upper_lim1 <- reactive({as.numeric(input$combine_res1[2])})
+        req_rows <- which(bv_data$res_rate > lower_lim1() &
+                            bv_data$res_rate <= upper_lim1() )
+        req_names <- bv_data$Attribute[req_rows]
+
+        new_data <- bv_data %>% mutate(
+          var_bands = ifelse(Attribute %in% req_names,
+                             paste(req_names, collapse = ""),
+                             Attribute)
+          )
+
+        new_data <- new_data %>% group_by(var_bands) %>%
+          summarise(zeros = sum(zeros, na.rm = T),
+                    ones = sum(ones, na.rm = T),
+                    tot = sum(tot, na.rm = T))
+
+        n <- nrow(subset_data())
+
+        new_data <- mutate(new_data,
+                          res_rate = round((ones / tot), 4),
+                          cust_perc = round((tot / n), 4) ) %>%
+          as.data.frame()
+       }
+       else if(numAssets == 2) {
+        lower_lim1 <- reactive({as.numeric(input$combine_res1[1])})
+        upper_lim1 <- reactive({as.numeric(input$combine_res1[2])})
+        req_rows1 <- which(new_data$res_rate > lower_lim1() &
+                            new_data$res_rate <= upper_lim1() )
+        req_names1 <- new_data$Attribute[req_rows1]
+
+        lower_lim2 <- reactive({as.numeric(input$combine_res2[1])})
+        upper_lim2 <- reactive({as.numeric(input$combine_res2[2])})
+        req_rows2 <- which(new_data$res_rate > lower_lim2() &
+                             new_data$res_rate <= upper_lim2() )
+        req_names2 <- new_data$Attribute[req_rows2]
+
+        new_data <- new_data %>% mutate(
+          var_bands = ifelse(Attribute %in% req_names1,
+                             paste(req_names1, collapse = ""),
+                             ifelse(Attribute %in% req_names2,
+                                    paste(req_names2, collapse = ""),
+                             Attribute))
+        )
+
+        new_data <- new_data %>% group_by_("var_bands") %>%
+          summarise(zeros = sum(zeros, na.rm = T),
+                    ones = sum(ones, na.rm = T),
+                    tot = sum(tot, na.rm = T))
+
+        n <- nrow(subset_data())
+
+        new_data <- mutate(new_data,
+                          res_rate = round((ones / tot), 4),
+                          cust_perc = round((tot / n), 4) ) %>%
+          as.data.frame()
+
+      } else if(numAssets == 3) {
+        lower_lim1 <- reactive({as.numeric(input$combine_res1[1])})
+        upper_lim1 <- reactive({as.numeric(input$combine_res1[2])})
+        req_rows1 <- which(new_data$res_rate > lower_lim1() &
+                             new_data$res_rate <= upper_lim1() )
+        req_names1 <- new_data$Attribute[req_rows1]
+
+        lower_lim2 <- reactive({as.numeric(input$combine_res2[1])})
+        upper_lim2 <- reactive({as.numeric(input$combine_res2[2])})
+        req_rows2 <- which(new_data$res_rate > lower_lim2() &
+                             new_data$res_rate <= upper_lim2() )
+        req_names2 <- new_data$Attribute[req_rows2]
+
+        lower_lim3 <- reactive({as.numeric(input$combine_res3[1])})
+        upper_lim3 <- reactive({as.numeric(input$combine_res3[2])})
+        req_rows3 <- which(new_data$res_rate > lower_lim3() &
+                             new_data$res_rate <= upper_lim3() )
+        req_names3 <- new_data$Attribute[req_rows3]
+
+
+        new_data <- new_data %>% mutate(
+          var_bands = ifelse(Attribute %in% req_names1,
+                             paste(req_names1, collapse = ""),
+                             ifelse(Attribute %in% req_names2,
+                                    paste(req_names2, collapse = ""),
+                                    ifelse(Attribute %in% req_names3,
+                                           paste(req_names3, collapse = ""),
+                                    Attribute)))
+        )
+
+        new_data <- new_data %>% group_by_("var_bands") %>%
+          summarise(zeros = sum(zeros, na.rm = T),
+                    ones = sum(ones, na.rm = T),
+                    tot = sum(tot, na.rm = T))
+
+        n <- nrow(subset_data())
+
+        new_data <- mutate(new_data,
+                          res_rate = round((ones / tot), 4),
+                          cust_perc = round((tot / n), 4) ) %>%
+          as.data.frame()
+
+      } else if(numAssets == 4) {
+        lower_lim1 <- reactive({as.numeric(input$combine_res1[1])})
+        upper_lim1 <- reactive({as.numeric(input$combine_res1[2])})
+        req_rows1 <- which(new_data$res_rate > lower_lim1() &
+                             new_data$res_rate <= upper_lim1() )
+        req_names1 <- new_data$Attribute[req_rows1]
+
+        lower_lim2 <- reactive({as.numeric(input$combine_res2[1])})
+        upper_lim2 <- reactive({as.numeric(input$combine_res2[2])})
+        req_rows2 <- which(new_data$res_rate > lower_lim2() &
+                             new_data$res_rate <= upper_lim2() )
+        req_names2 <- new_data$Attribute[req_rows2]
+
+        lower_lim3 <- reactive({as.numeric(input$combine_res3[1])})
+        upper_lim3 <- reactive({as.numeric(input$combine_res3[2])})
+        req_rows3 <- which(new_data$res_rate > lower_lim3() &
+                             new_data$res_rate <= upper_lim3() )
+        req_names3 <- new_data$Attribute[req_rows3]
+
+        lower_lim4 <- reactive({as.numeric(input$combine_res4[1])})
+        upper_lim4 <- reactive({as.numeric(input$combine_res4[2])})
+        req_rows4 <- which(new_data$res_rate > lower_lim4() &
+                             new_data$res_rate <= upper_lim4() )
+        req_names4 <- new_data$Attribute[req_rows4]
+
+        new_data <- new_data %>% mutate(
+          var_bands = ifelse(Attribute %in% req_names1,
+                             paste(req_names1, collapse = ""),
+                             ifelse(Attribute %in% req_names2,
+                                    paste(req_names2, collapse = ""),
+                                    ifelse(Attribute %in% req_names3,
+                                           paste(req_names3, collapse = ""),
+                                           ifelse(Attribute %in% req_names4,
+                                                  paste(req_names4, collapse = ""),
+                                           Attribute))))
+        )
+
+        new_data <- new_data %>% group_by_("var_bands") %>%
+          summarise(zeros = sum(zeros, na.rm = T),
+                    ones = sum(ones, na.rm = T),
+                    tot = sum(tot, na.rm = T))
+
+        n <- nrow(subset_data())
+
+        new_data <- mutate(new_data,
+                          res_rate = round((ones / tot), 4),
+                          cust_perc = round((tot / n), 4) ) %>%
+          as.data.frame()
+
+      } 
+      good_out <- new_data
+    }
+    return(good_out) 
+  })
+  
+  output$newcheck <- renderText({
+    
+    if(input$new_tot_classes == 1) {
+      lower_lim1 <- reactive({as.numeric(input$combine_res1[1])})
+      upper_lim1 <- reactive({as.numeric(input$combine_res1[2])})
+      req_rows <- which(final_view()$res_rate > lower_lim1() &
+                               final_view()$res_rate <= upper_lim1() )
+      req_names <- final_view()$Attribute[req_rows]
+      paste(req_names, sep = " ")
+    } else {paste("Nothing")}
+  })
+  
+  my_pretty_out <- reactive({
+    pretty_out <- final_view()
+    pretty_out$tot <- format(pretty_out$tot, big.mark=',',
+                        scientific=FALSE)
+
+    pretty_out$zeros <- format(pretty_out$zeros, big.mark=',',
+                          scientific=FALSE)
+
+    pretty_out$ones <- format(pretty_out$ones, big.mark=',',
+                         scientific=FALSE)
+
+    pretty_out$res_rate <- percent(pretty_out$res_rate)
+    pretty_out$cust_perc <- percent(pretty_out$cust_perc)
+    return(pretty_out)
   })
   
   output$view <- renderDataTable({
-    datatable(final_view())
+    datatable(my_pretty_out())
   })
   
   # output$value2 <- renderText({
@@ -725,18 +954,7 @@ server <- function(input, output, session) {
   # })
   
   datasetInput <- reactive({
-    nbv_data <- newtable() %>% group_by_("var_bands", input$response) %>%
-      summarise(tot = n()) %>% 
-      spread_(key = input$response, value = "tot") %>%
-      dplyr::rename(zeros = `0`, ones = `1`)
-    
-    nbv_data[is.na(nbv_data)] <- 0
-    n <- nrow(subset_data())
-    
-    nbv_data <- mutate(nbv_data, tot = zeros + ones,
-                       res_rate = round((ones / tot), 4),
-                       cust_perc = round((tot / n), 4) ) %>% 
-      as.data.frame()
+    nbv_data <- final_view() %>% as.data.frame()
     
     colnames(nbv_data)[1] <- "Attribute"
     new_var <- rep(input$variable, nrow(nbv_data))
@@ -772,9 +990,12 @@ server <- function(input, output, session) {
                 colour = "sienna3", fill = "tan1") +
       # scale_fill_grey(start =.1, end = .7 ) +
       xlab("Attribute") + 
-      ylab("Total Population") +
-      geom_text(aes(label = value, x = Attribute, y = 0.95 * value), 
-                colour = "black") #+ 
+      ylab("Total Population") 
+    
+    if(input$text_on_bar == TRUE) {
+      p1 <- p1 + geom_text(aes(label = value, x = Attribute, y = 0.95 * value), 
+                colour = "black") 
+      } #+ 
     # theme(legend.position="top")
     
     g1 <- ggplotGrob(p1)
@@ -784,11 +1005,16 @@ server <- function(input, output, session) {
                  aes(x = Attribute, y = res_rate, 
                      group = Variable_name)) + 
       geom_line()  + 
-      ylab("Response Rate") +
-      geom_text(aes(label = res_rate, x = Attribute, 
-                    y = res_rate,
-                    group = Variable_name), 
-                colour = "black") +
+      ylab("Response Rate")
+    
+    if(input$text_on_line == TRUE) {
+      p2 <- p2 + geom_text(aes(label = res_rate, x = Attribute, 
+                               y = res_rate,
+                               group = Variable_name), 
+                           colour = "black")
+    } 
+    
+    p2 <- p2 +
       theme(panel.background = element_rect(fill = NA),
             panel.grid.major = element_blank(), 
             panel.grid.minor = element_blank())
